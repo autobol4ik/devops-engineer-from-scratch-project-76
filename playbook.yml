@@ -1,0 +1,264 @@
+---
+- name: Configure and deploy Redmine
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1
+  module_defaults:
+    ansible.builtin.apt:
+      cache_valid_time: 3600
+
+  pre_tasks:
+    - name: Update APT package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts["os_family"] == "Debian"
+      tags:
+        - prepare
+
+    - name: Select packages that conflict with distribution Docker
+      ansible.builtin.set_fact:
+        docker_obsolete_packages:
+          - docker-ce
+          - docker-ce-cli
+          - docker-ce-rootless-extras
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+      when: ansible_facts["os_family"] == "Debian"
+      tags:
+        - prepare
+
+    - name: Create controller Datadog key cache
+      ansible.builtin.file:
+        path: /tmp/hexlet-6-datadog-keys
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+      when: "'webservers' in group_names"
+      tags:
+        - monitoring
+
+    - name: Download Datadog APT signing keys on controller
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/tmp/hexlet-6-datadog-keys/{{ item.file }}"
+        mode: "0600"
+        timeout: 60
+      loop:
+        - file: DATADOG_APT_KEY_CURRENT.public
+          url: >-
+            https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_CURRENT.public
+        - file: DATADOG_APT_KEY_382E94DE.public
+          url: >-
+            https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_382E94DE.public
+        - file: DATADOG_APT_KEY_F14F620E.public
+          url: >-
+            https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_F14F620E.public
+        - file: DATADOG_APT_KEY_C0962C7D.public
+          url: >-
+            https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_C0962C7D.public
+        - file: DATADOG_APT_KEY_06462314.public
+          url: >-
+            https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_06462314.public
+      loop_control:
+        label: "{{ item.file }}"
+      register: datadog_apt_key_download
+      until: datadog_apt_key_download is succeeded
+      retries: 5
+      delay: 5
+      delegate_to: localhost
+      become: false
+      when: "'webservers' in group_names"
+      tags:
+        - monitoring
+
+    - name: Create remote Datadog key staging directory
+      ansible.builtin.file:
+        path: /var/cache/hexlet-6-datadog-keys
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: "'webservers' in group_names"
+      tags:
+        - monitoring
+
+    - name: Stage Datadog APT signing keys
+      ansible.builtin.copy:
+        src: "/tmp/hexlet-6-datadog-keys/{{ item }}"
+        dest: "/var/cache/hexlet-6-datadog-keys/{{ item }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop:
+        - DATADOG_APT_KEY_CURRENT.public
+        - DATADOG_APT_KEY_382E94DE.public
+        - DATADOG_APT_KEY_F14F620E.public
+        - DATADOG_APT_KEY_C0962C7D.public
+        - DATADOG_APT_KEY_06462314.public
+      when: "'webservers' in group_names"
+      tags:
+        - monitoring
+
+  roles:
+    - role: geerlingguy.pip
+      vars:
+        pip_install_packages:
+          - name: docker
+            version: "7.2.0"
+            extra_args: --break-system-packages
+      tags:
+        - prepare
+
+    - role: geerlingguy.docker
+      vars:
+        docker_add_repo: false
+        docker_install_compose_plugin: false
+        docker_packages:
+          - docker.io
+        docker_users:
+          - "{{ ansible_user }}"
+      tags:
+        - prepare
+
+  tasks:
+    - name: Validate Redmine deployment variables
+      ansible.builtin.assert:
+        that:
+          - redmine_db_host | length > 0
+          - redmine_db_password | length > 0
+          - redmine_secret_key_base | length > 0
+        fail_msg: Required Redmine database or Vault variables are missing.
+      no_log: true
+      tags:
+        - deploy
+
+    - name: Create Redmine configuration directory
+      ansible.builtin.file:
+        path: "{{ redmine_env_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      tags:
+        - deploy
+
+    - name: Render Redmine environment file
+      ansible.builtin.template:
+        src: redmine.env.j2
+        dest: "{{ redmine_env_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      diff: false
+      tags:
+        - deploy
+
+    - name: Create Redmine files volume
+      community.docker.docker_volume:
+        name: "{{ redmine_files_volume }}"
+        state: present
+      tags:
+        - deploy
+
+    - name: Ensure official Redmine image is present
+      community.docker.docker_image:
+        name: "{{ redmine_image }}"
+        source: pull
+        force_source: false
+      tags:
+        - deploy
+
+    - name: Inspect Redmine image
+      community.docker.docker_image_info:
+        name: "{{ redmine_image }}"
+      register: redmine_image_info
+      tags:
+        - deploy
+
+    - name: Verify Redmine image digest
+      ansible.builtin.assert:
+        that:
+          - redmine_image_info.images | length == 1
+          - redmine_image_info.images[0].Id == redmine_image_digest
+        fail_msg: The local Redmine image does not match the pinned digest.
+      tags:
+        - deploy
+
+    - name: Start Redmine container
+      community.docker.docker_container:
+        name: "{{ redmine_container_name }}"
+        image: "{{ redmine_image }}"
+        pull: never
+        state: started
+        detach: true
+        restart_policy: unless-stopped
+        env_file: "{{ redmine_env_file }}"
+        published_ports:
+          - "{{ redmine_port }}:3000"
+        volumes:
+          - "{{ redmine_files_volume }}:/usr/src/redmine/files"
+      no_log: true
+      tags:
+        - deploy
+
+    - name: Wait for Redmine login page
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ redmine_port }}/login"
+        status_code: 200
+        follow_redirects: none
+        use_proxy: false
+        return_content: false
+        timeout: 5
+      register: redmine_health
+      until: (redmine_health.status | default(-1)) == 200
+      retries: 60
+      delay: 5
+      changed_when: false
+      when: not ansible_check_mode
+      tags:
+        - deploy
+
+    - name: Validate Datadog deployment variables
+      ansible.builtin.assert:
+        that:
+          - datadog_api_key | length > 0
+          - datadog_site is defined
+          - datadog_site | length > 0
+          - datadog_agent_version is defined
+          - datadog_agent_version | length > 0
+        fail_msg: >-
+          Required Datadog site, version, or Vault variables are missing.
+      when: "'webservers' in group_names"
+      no_log: true
+      tags:
+        - monitoring
+
+    - name: Install and configure Datadog Agent
+      ansible.builtin.import_role:
+        name: datadog.dd.agent
+      vars:
+        datadog_apt_default_keys:
+          - key: DATADOG_APT_KEY_CURRENT
+            value: >-
+              file:///var/cache/hexlet-6-datadog-keys/DATADOG_APT_KEY_CURRENT.public
+          - key: A2923DFF56EDA6E76E55E492D3A80E30382E94DE
+            value: >-
+              file:///var/cache/hexlet-6-datadog-keys/DATADOG_APT_KEY_382E94DE.public
+          - key: D75CEA17048B9ACBF186794B32637D44F14F620E
+            value: >-
+              file:///var/cache/hexlet-6-datadog-keys/DATADOG_APT_KEY_F14F620E.public
+          - key: 5F1E256061D813B125E156E8E6266D4AC0962C7D
+            value: >-
+              file:///var/cache/hexlet-6-datadog-keys/DATADOG_APT_KEY_C0962C7D.public
+          - key: D18886567EABAD8B2D2526900D826EB906462314
+            value: >-
+              file:///var/cache/hexlet-6-datadog-keys/DATADOG_APT_KEY_06462314.public
+      when: "'webservers' in group_names"
+      no_log: true
+      tags:
+        - monitoring

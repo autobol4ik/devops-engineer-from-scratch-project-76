@@ -1,0 +1,12 @@
+---
+roles:
+  - name: geerlingguy.pip
+    version: "3.1.2"
+  - name: geerlingguy.docker
+    version: "8.0.0"
+
+collections:
+  - name: community.docker
+    version: "5.2.1"
+  - name: datadog.dd
+    version: "6.5.0"
