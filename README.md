@@ -10,6 +10,7 @@
 - GNU Make
 - SSH access to both servers from `inventory.ini`
 - Ansible Vault password
+- Yandex Cloud CLI and `jq` for inventory refresh
 
 ## Install dependencies
 
@@ -28,6 +29,13 @@ make vault-edit
 
 The Vault defines `vault_redmine_db_password`,
 `vault_redmine_secret_key_base`, and `vault_datadog_api_key`.
+
+Refresh the tracked inventory after the virtual machine public addresses change:
+
+```sh
+export PROJECT6_FOLDER_ID=your-folder-id
+make inventory-refresh
+```
 
 Install Docker and the required Python packages on both servers:
 

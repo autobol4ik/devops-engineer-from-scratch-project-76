@@ -12,7 +12,7 @@
     - name: Update APT package cache
       ansible.builtin.apt:
         update_cache: true
-        cache_valid_time: 0
+        cache_valid_time: 3600
       when: ansible_facts["os_family"] == "Debian"
       tags:
         - prepare
@@ -171,7 +171,7 @@
 
     - name: Ensure official Redmine image is present
       community.docker.docker_image:
-        name: "{{ redmine_image }}"
+        name: "{{ redmine_image_reference }}"
         source: pull
         force_source: false
       when: "'webservers' in group_names"
@@ -180,8 +180,21 @@
 
     - name: Inspect Redmine image
       community.docker.docker_image_info:
-        name: "{{ redmine_image }}"
+        name: "{{ redmine_image_reference }}"
       register: redmine_image_info
+      when: "'webservers' in group_names"
+      tags:
+        - deploy
+
+    - name: Collect Redmine repository digests
+      ansible.builtin.set_fact:
+        redmine_repository_digests: >-
+          {{
+            redmine_image_info.images
+            | map(attribute='RepoDigests', default=[])
+            | flatten
+            | list
+          }}
       when: "'webservers' in group_names"
       tags:
         - deploy
@@ -189,9 +202,12 @@
     - name: Verify Redmine image digest
       ansible.builtin.assert:
         that:
-          - redmine_image_info.images | length == 1
-          - redmine_image_info.images[0].Id == redmine_image_digest
-        fail_msg: The local Redmine image does not match the pinned digest.
+          - redmine_image_digest is match('^sha256:[0-9a-f]{64}$')
+          - >-
+            redmine_image_reference
+            == redmine_repository ~ '@' ~ redmine_image_digest
+          - redmine_image_reference in redmine_repository_digests
+        fail_msg: The pinned Redmine repository digest is not present locally.
       when: "'webservers' in group_names"
       tags:
         - deploy
@@ -199,7 +215,7 @@
     - name: Start Redmine container
       community.docker.docker_container:
         name: "{{ redmine_container_name }}"
-        image: "{{ redmine_image }}"
+        image: "{{ redmine_image_reference }}"
         pull: never
         state: started
         detach: true
