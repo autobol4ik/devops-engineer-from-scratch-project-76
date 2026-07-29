@@ -1,4 +1,9 @@
 ---
+- name: Stage monitoring signing keys
+  ansible.builtin.import_tasks: keys.yml
+  tags:
+    - monitoring
+
 - name: Validate Datadog deployment variables
   ansible.builtin.assert:
     that:

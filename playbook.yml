@@ -8,21 +8,6 @@
     ansible.builtin.apt:
       cache_valid_time: 3600
 
-  pre_tasks:
-    - name: Prepare package prerequisites
-      ansible.builtin.import_role:
-        name: docker
-        tasks_from: prerequisites
-      tags:
-        - prepare
-
-    - name: Stage monitoring signing keys
-      ansible.builtin.import_role:
-        name: monitoring
-        tasks_from: keys
-      tags:
-        - monitoring
-
   roles:
     - role: docker
       tags:

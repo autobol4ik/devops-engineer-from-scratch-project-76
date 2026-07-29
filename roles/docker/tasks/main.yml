@@ -1,4 +1,9 @@
 ---
+- name: Prepare package prerequisites
+  ansible.builtin.import_tasks: prerequisites.yml
+  tags:
+    - prepare
+
 - name: Install Docker SDK for Python
   ansible.builtin.import_role:
     name: geerlingguy.pip
