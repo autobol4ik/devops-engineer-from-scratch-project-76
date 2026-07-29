@@ -1,0 +1,21 @@
+---
+- name: Update APT package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ 3600 if 'webservers' in group_names else 0 }}"
+  when: ansible_facts["os_family"] == "Debian"
+  tags:
+    - prepare
+
+- name: Select packages that conflict with distribution Docker
+  ansible.builtin.set_fact:
+    docker_obsolete_packages:
+      - docker-ce
+      - docker-ce-cli
+      - docker-ce-rootless-extras
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+  when: ansible_facts["os_family"] == "Debian"
+  tags:
+    - prepare

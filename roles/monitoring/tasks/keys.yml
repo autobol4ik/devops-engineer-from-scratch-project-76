@@ -1,0 +1,73 @@
+---
+- name: Create controller Datadog key cache
+  ansible.builtin.file:
+    path: /tmp/hexlet-6-datadog-keys
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  when: "'webservers' in group_names"
+  tags:
+    - monitoring
+
+- name: Download Datadog APT signing keys on controller
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/tmp/hexlet-6-datadog-keys/{{ item.file }}"
+    mode: "0600"
+    timeout: 60
+  loop:
+    - file: DATADOG_APT_KEY_CURRENT.public
+      url: >-
+        https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_CURRENT.public
+    - file: DATADOG_APT_KEY_382E94DE.public
+      url: >-
+        https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_382E94DE.public
+    - file: DATADOG_APT_KEY_F14F620E.public
+      url: >-
+        https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_F14F620E.public
+    - file: DATADOG_APT_KEY_C0962C7D.public
+      url: >-
+        https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_C0962C7D.public
+    - file: DATADOG_APT_KEY_06462314.public
+      url: >-
+        https://s3.amazonaws.com/public-signing-keys/DATADOG_APT_KEY_06462314.public
+  loop_control:
+    label: "{{ item.file }}"
+  register: monitoring_datadog_apt_key_download
+  until: monitoring_datadog_apt_key_download is succeeded
+  retries: 5
+  delay: 5
+  delegate_to: localhost
+  become: false
+  when: "'webservers' in group_names"
+  tags:
+    - monitoring
+
+- name: Create remote Datadog key staging directory
+  ansible.builtin.file:
+    path: /var/cache/hexlet-6-datadog-keys
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: "'webservers' in group_names"
+  tags:
+    - monitoring
+
+- name: Stage Datadog APT signing keys
+  ansible.builtin.copy:
+    src: "/tmp/hexlet-6-datadog-keys/{{ item }}"
+    dest: "/var/cache/hexlet-6-datadog-keys/{{ item }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - DATADOG_APT_KEY_CURRENT.public
+    - DATADOG_APT_KEY_382E94DE.public
+    - DATADOG_APT_KEY_F14F620E.public
+    - DATADOG_APT_KEY_C0962C7D.public
+    - DATADOG_APT_KEY_06462314.public
+  when: "'webservers' in group_names"
+  tags:
+    - monitoring

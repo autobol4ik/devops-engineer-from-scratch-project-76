@@ -1,0 +1,124 @@
+---
+- name: Validate Redmine deployment variables
+  ansible.builtin.assert:
+    that:
+      - redmine_db_host | length > 0
+      - redmine_db_password | length > 0
+      - redmine_secret_key_base | length > 0
+    fail_msg: Required Redmine database or Vault variables are missing.
+  when: "'webservers' in group_names"
+  no_log: true
+  tags:
+    - deploy
+
+- name: Create Redmine configuration directory
+  ansible.builtin.file:
+    path: "{{ redmine_env_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  when: "'webservers' in group_names"
+  tags:
+    - deploy
+
+- name: Render Redmine environment file
+  ansible.builtin.template:
+    src: redmine.env.j2
+    dest: "{{ redmine_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: "'webservers' in group_names"
+  no_log: true
+  diff: false
+  tags:
+    - deploy
+
+- name: Create Redmine files volume
+  community.docker.docker_volume:
+    name: "{{ redmine_files_volume }}"
+    state: present
+  when: "'webservers' in group_names"
+  tags:
+    - deploy
+
+- name: Ensure official Redmine image is present
+  community.docker.docker_image:
+    name: "{{ redmine_image_reference }}"
+    source: pull
+    force_source: false
+  when: "'webservers' in group_names"
+  tags:
+    - deploy
+
+- name: Inspect Redmine image
+  community.docker.docker_image_info:
+    name: "{{ redmine_image_reference }}"
+  register: redmine_image_info
+  when: "'webservers' in group_names"
+  tags:
+    - deploy
+
+- name: Collect Redmine repository digests
+  ansible.builtin.set_fact:
+    redmine_repository_digests: >-
+      {{
+        redmine_image_info.images
+        | map(attribute='RepoDigests', default=[])
+        | flatten
+        | list
+      }}
+  when: "'webservers' in group_names"
+  tags:
+    - deploy
+
+- name: Verify Redmine image digest
+  ansible.builtin.assert:
+    that:
+      - redmine_image_digest is match('^sha256:[0-9a-f]{64}$')
+      - >-
+        redmine_image_reference
+        == redmine_repository ~ '@' ~ redmine_image_digest
+      - redmine_image_reference in redmine_repository_digests
+    fail_msg: The pinned Redmine repository digest is not present locally.
+  when: "'webservers' in group_names"
+  tags:
+    - deploy
+
+- name: Start Redmine container
+  community.docker.docker_container:
+    name: "{{ redmine_container_name }}"
+    image: "{{ redmine_image_reference }}"
+    pull: never
+    state: started
+    detach: true
+    restart_policy: unless-stopped
+    env_file: "{{ redmine_env_file }}"
+    published_ports:
+      - "{{ redmine_port }}:3000"
+    volumes:
+      - "{{ redmine_files_volume }}:/usr/src/redmine/files"
+  when: "'webservers' in group_names"
+  no_log: true
+  tags:
+    - deploy
+
+- name: Wait for Redmine login page
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ redmine_port }}/login"
+    status_code: 200
+    follow_redirects: none
+    use_proxy: false
+    return_content: false
+    timeout: 5
+  register: redmine_health
+  until: (redmine_health.status | default(-1)) == 200
+  retries: 60
+  delay: 5
+  changed_when: false
+  when:
+    - "'webservers' in group_names"
+    - not ansible_check_mode
+  tags:
+    - deploy
